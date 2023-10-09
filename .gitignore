@@ -30,3 +30,7 @@
 *.exe
 *.out
 *.app
+
+# Folders not to be counted
+_ref
+build/
