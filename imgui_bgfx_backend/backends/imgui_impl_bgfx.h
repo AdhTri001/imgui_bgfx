@@ -9,8 +9,11 @@
 
 #pragma once
 #include "imgui.h"
+#include "bgfx/bgfx.h"
+#include "bx/allocator.h"
+#include <cstdint>
 
-IMGUI_IMPL_API bool ImGui_Implbgfx_Init(int view);
+IMGUI_IMPL_API bool ImGui_Implbgfx_Init(int view, bx::AllocatorI* allocator);
 IMGUI_IMPL_API void ImGui_Implbgfx_Shutdown();
 IMGUI_IMPL_API void ImGui_Implbgfx_NewFrame();
 IMGUI_IMPL_API void ImGui_Implbgfx_RenderDrawLists(struct ImDrawData* draw_data);

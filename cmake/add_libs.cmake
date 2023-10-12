@@ -58,7 +58,7 @@ add_library(imgui_impl_glfw STATIC
 )
 target_link_libraries(imgui_impl_glfw PUBLIC imgui glfw)
 target_compile_definitions(imgui PUBLIC -DIMGUI_DISABLE_OBSOLETE_FUNCTIONS)
-target_link_libraries(${PROJECT_NAME} PUBLIC imgui imgui_impl_glfw imgui_impl_bgfx)
+target_link_libraries(${PROJECT_NAME} PUBLIC imgui imgui_impl_glfw)
 target_include_directories(${PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/bgfx_imgui_backend
     ${imgui_SOURCE_DIR}

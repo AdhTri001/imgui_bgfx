@@ -1,0 +1,15 @@
+cmake_minimum_required(
+    VERSION 3.12
+)
+# set(CMAKE_CXX_STANDARD 14)
+# set(CMAKE_C_COMPILER_LAUNCHER "ccache")
+# set(CMAKE_CXX_COMPILER_LAUNCHER "ccache")
+# set(CMAKE_GENERATOR "Ninja")
+
+project(
+    imgui_bgfx_backend_example
+)
+
+add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
+
+target_link_libraries(${PROJECT_NAME} PUBLIC imgui bgfx bx bimg imgui_bgfx_backend imgui_impl_glfw)

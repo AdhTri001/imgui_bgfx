@@ -36,7 +36,7 @@ struct ImGui_Implbgfx_Data
     ImGui_Implbgfx_Data() { memset((void*)this, 0, sizeof(*this)); }
 };
 
-inline static ImGui_Implbgfx_Data* ImGui_Implbgfx_GetBackendData()
+static inline ImGui_Implbgfx_Data* ImGui_Implbgfx_GetBackendData()
 {
     return ImGui::GetCurrentContext() ? (ImGui_Implbgfx_Data*)ImGui::GetIO().BackendRendererUserData : nullptr;
 }
@@ -53,13 +53,31 @@ static void memFree(void* _ptr, void* _userData)
 	bx::free(ImGui_Implbgfx_GetBackendData()->allocator, _ptr);
 }
 
+/**
+ * Returns true if both internal transient index and vertex buffer have
+ * enough space.
+ * @param[in] _numVertices Number of vertices.
+ * @param[in] _layout Vertex layout.
+ * @param[in] _numIndices Number of indices. */
+static inline bool checkAvailTransientBuffers(uint32_t _numVertices, const bgfx::VertexLayout& _layout, uint32_t _numIndices)
+{
+	return _numVertices == bgfx::getAvailTransientVertexBuffer(_numVertices, _layout)
+		&& (0 == _numIndices || _numIndices == bgfx::getAvailTransientIndexBuffer(_numIndices));
+}
+
 bool ImGui_Implbgfx_Init(int viewId, bx::AllocatorI* allocator) {
     ImGuiIO& io = ImGui::GetIO();
     IM_ASSERT(io.BackendRendererUserData == nullptr && "Already initialized a renderer backend!");
 
     ImGui_Implbgfx_Data* bd = IM_NEW(ImGui_Implbgfx_Data)();
     bd->viewId = (uint8_t)(viewId & 0xff);
-    bd->allocator = allocator;
+    if (NULL == allocator)
+    {
+        static bx::DefaultAllocator _allocator;
+        bd->allocator = &_allocator;
+    } else {
+        bd->allocator = allocator;
+    }
     bgfx::setViewName(viewId, "imgui_impl_bgfx"); // Helpfull while debugging
     bgfx::setViewMode(viewId, bgfx::ViewMode::Sequential);
 
@@ -119,8 +137,6 @@ void ImGui_Implbgfx_Shutdown() {
     io.BackendRendererUserData = nullptr;
     io.BackendFlags &= ~ImGuiBackendFlags_RendererHasVtxOffset;
     IM_DELETE(bd);
-
-    return true;
 }
 
 void ImGui_Implbgfx_NewFrame() {
@@ -132,6 +148,7 @@ void ImGui_Implbgfx_NewFrame() {
 }
 
 bool ImGui_Implbgfx_CreateDeviceObjects() {
+    return true;
 }
 
 void ImGui_Implbgfx_RenderDrawLists(struct ImDrawData* draw_data) {
@@ -140,4 +157,119 @@ void ImGui_Implbgfx_RenderDrawLists(struct ImDrawData* draw_data) {
     int fb_height = (int)(draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
     if (fb_width <= 0 || fb_height <= 0)
         return;
+
+    ImGui_Implbgfx_Data* bd = ImGui_Implbgfx_GetBackendData();
+
+    const bgfx::Caps* caps = bgfx::getCaps();
+    {
+        float ortho[16];
+        float x      = draw_data->DisplayPos.x;
+        float y      = draw_data->DisplayPos.y;
+        float width  = draw_data->DisplaySize.x;
+        float height = draw_data->DisplaySize.y;
+
+        bx::mtxOrtho(ortho, x, x + width, y + height, y, 0.0f, 1000.0f, 0.0f, caps->homogeneousDepth);
+        bgfx::setViewTransform(bd->viewId, NULL, ortho);
+        bgfx::setViewRect(bd->viewId, 0, 0, uint16_t(width), uint16_t(height));
+    }
+
+    const ImVec2 clip_off = draw_data->DisplayPos;
+    const ImVec2 clip_scale = draw_data->FramebufferScale;
+
+    for (int n = 0; n < draw_data->CmdListsCount; n++)
+    {
+        bgfx::TransientVertexBuffer tvb;
+        bgfx::TransientIndexBuffer tib;
+        const ImDrawList* draw_list = draw_data->CmdLists[n];
+
+        uint32_t vtxBufferSize = draw_list->VtxBuffer.size();
+        uint32_t idxBufferSize = draw_list->IdxBuffer.size();
+
+        if (!checkAvailTransientBuffers(vtxBufferSize, bd->layout, idxBufferSize))
+        {
+            // not enough space in transient buffer just quit drawing the rest...
+            break;
+        }
+
+        bgfx::allocTransientVertexBuffer(&tvb, idxBufferSize, bd->layout);
+        bgfx::allocTransientIndexBuffer(&tib, idxBufferSize, sizeof(ImDrawIdx) == 4);
+
+        ImDrawVert* verts = (ImDrawVert*)tvb.data;
+        bx::memCopy(verts, draw_list->VtxBuffer.begin(), vtxBufferSize * sizeof(ImDrawVert));
+        ImDrawIdx* indices = (ImDrawIdx*)tib.data;
+        bx::memCopy(indices, draw_list->IdxBuffer.begin(), idxBufferSize * sizeof(ImDrawIdx));
+
+        bgfx::Encoder* encoder = bgfx::begin();
+
+        for (const ImDrawCmd* cmd = draw_list->CmdBuffer.begin(), *cmdEnd = draw_list->CmdBuffer.end(); cmd != cmdEnd; ++cmd)
+        {
+            if (cmd->UserCallback)
+            {
+                cmd->UserCallback(draw_list, cmd);
+            }
+            else if (0 != cmd->ElemCount)
+            {
+                uint64_t state = 0
+                    | BGFX_STATE_WRITE_RGB
+                    | BGFX_STATE_WRITE_A
+                    | BGFX_STATE_MSAA
+                    ;
+
+                bgfx::TextureHandle th = bd->fontTexture;
+                bgfx::ProgramHandle program = bd->IM_Program;
+
+                if (NULL != cmd->TextureId)
+                {
+                    union { ImTextureID ptr; struct { bgfx::TextureHandle handle; uint8_t flags; uint8_t mip; } s; } texture = { cmd->TextureId };
+                    state |= 0 != (IMGUI_FLAGS_ALPHA_BLEND & texture.s.flags)
+                        ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA)
+                        : BGFX_STATE_NONE
+                        ;
+                    th = texture.s.handle;
+                    if (0 != texture.s.mip)
+                    {
+                        const float lodEnabled[4] = { float(texture.s.mip), 1.0f, 0.0f, 0.0f };
+                        bgfx::setUniform(bd->u_imageLodEnabled, lodEnabled);
+                        program = bd->IM_ImageProgram;
+                    }
+                }
+                else
+                {
+                    state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+                }
+
+                // Project scissor/clipping rectangles into framebuffer space
+                ImVec4 clipRect;
+                clipRect.x = (cmd->ClipRect.x - clip_off.x) * clip_scale.x;
+                clipRect.y = (cmd->ClipRect.y - clip_off.y) * clip_scale.y;
+                clipRect.z = (cmd->ClipRect.z - clip_off.x) * clip_scale.x;
+                clipRect.w = (cmd->ClipRect.w - clip_off.y) * clip_scale.y;
+
+                if (clipRect.x <  fb_width
+                &&  clipRect.y <  fb_height
+                &&  clipRect.z >= 0.0f
+                &&  clipRect.w >= 0.0f)
+                {
+                    const uint16_t xx = uint16_t(bx::max(clipRect.x, 0.0f) );
+                    const uint16_t yy = uint16_t(bx::max(clipRect.y, 0.0f) );
+                    encoder->setScissor(xx, yy
+                            , uint16_t(bx::min(clipRect.z, 65535.0f)-xx)
+                            , uint16_t(bx::min(clipRect.w, 65535.0f)-yy)
+                            );
+
+                    encoder->setState(state);
+                    encoder->setTexture(0, bd->s_tex, th);
+                    encoder->setVertexBuffer(0, &tvb, cmd->VtxOffset, vtxBufferSize);
+                    encoder->setIndexBuffer(&tib, cmd->IdxOffset, cmd->ElemCount);
+                    encoder->submit(bd->viewId, program);
+                }
+            }
+        }
+
+        bgfx::end(encoder);
+    }
+}
+
+bool ImGui_Implbgfx_InvalidateDeviceObjects() {
+    return true;
 }
