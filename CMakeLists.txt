@@ -26,3 +26,11 @@ target_link_libraries(${PROJECT_NAME} PUBLIC imgui bgfx bx bimg)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/add_libs.cmake)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/example)
+
+execute_process(
+    COMMAND shaderCompile.bat #${bgfx_SOURCE_DIR}/bgfx/src
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/example
+    RESULT_VARIABLE rv
+)
+
+message("Output=${RV}")
